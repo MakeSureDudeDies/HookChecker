@@ -4,9 +4,10 @@
 #include <iostream>
 #include <print>
 #include <vector>
-#include <array>
+#include <thread>
 
 #include <TlHelp32.h>
+#include <shlwapi.h>
 #include <winnt.h>
 #include <assert.h>
 
@@ -49,25 +50,37 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
     HMODULE ModuleHandle = GetModuleHandleA(ModuleName);
 
     if (!ModuleHandle) { // if we get there, idk how we failed so bad.
-        std::println("GetModuleHandleA Failed. Error Code: 0x{:X}", GetLastError());
+        std::println("GetModuleHandleA Failed for {}. Error Code: 0x{:X}", ModuleName, GetLastError());
         return false;
     }
 
     void* FuncAddress = (void*)GetProcAddress(ModuleHandle, ExportName);
 
     if (!FuncAddress) {
-        std::println("GetProcAddress Failed. Error Code: 0x{:X}", GetLastError());
+        std::println("GetProcAddress Failed for {} ( Export Name: {} ). Error Code: 0x{:X}", ModuleName, ExportName, GetLastError());
         return false;
     }
 
     std::vector<BYTE> Buffer(25);
+
+    DWORD OldProtection;
+    if (!VirtualProtectEx(ProcessHandle, FuncAddress, Buffer.size(), PAGE_EXECUTE_READWRITE, &OldProtection)) {
+        std::println("VirtualProtectEx Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
+        return false;
+    }
+
     if (!ReadProcessMemory(ProcessHandle, FuncAddress, Buffer.data(), Buffer.size(), nullptr)) {
-        std::println("ReadProcessMemory Failed. Error Code: 0x{:X}", GetLastError());
+        std::println("ReadProcessMemory Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
+        return false;
+    }
+
+    if (!VirtualProtectEx(ProcessHandle, FuncAddress, Buffer.size(), OldProtection, &OldProtection)) {
+        std::println("VirtualProtectEx (Reverting to old protection) Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
         return false;
     }
 
     std::vector<BYTE> CurrentProcessBuffer(25);
-    memcpy(CurrentProcessBuffer.data(), FuncAddress, Buffer.size());
+    memcpy(CurrentProcessBuffer.data(), FuncAddress, CurrentProcessBuffer.size());
     
     if (memcmp(Buffer.data(), CurrentProcessBuffer.data(), 25) != 0) {
         if (Buffer[0] != 0xE9 && Buffer[0] == CurrentProcessBuffer[0] || strcmp(ExportName, "KiUserInvertedFunctionTable") == 0) { // first check is jmp second is first byte match
@@ -109,20 +122,39 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
 
 void WalkExportsAndCheck(HANDLE ProcessHandle, const char* ModuleName) {
     HMODULE ModuleHandle = GetModuleHandleA(ModuleName);
-    if (ModuleHandle) {
-        if (reinterpret_cast<IMAGE_DOS_HEADER*>(ModuleHandle)->e_magic == IMAGE_DOS_SIGNATURE) {
-            IMAGE_NT_HEADERS* Header = (IMAGE_NT_HEADERS*)((BYTE*)ModuleHandle + ((IMAGE_DOS_HEADER*)ModuleHandle)->e_lfanew);
-            if (Header->Signature == IMAGE_NT_SIGNATURE) {
-                if (Header->OptionalHeader.NumberOfRvaAndSizes > 0) {
-                    IMAGE_EXPORT_DIRECTORY* Exports = (IMAGE_EXPORT_DIRECTORY*)((BYTE*)ModuleHandle + Header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
-                    if (Exports->AddressOfNames != 0) {
-                        DWORD* Names = (DWORD*)((BYTE*)ModuleHandle + Exports->AddressOfNames);
-                        for (int i = 0; i <= Exports->NumberOfNames - 1; i++) {
-                            CheckHooked(ProcessHandle, ModuleName, reinterpret_cast<const char*>(ModuleHandle) + Names[i]);
-                        }
-                    }
-                }
-            }
+
+    if (!ModuleHandle) {
+        std::println("GetModuleHandleA Failed for {}. Error Code: 0x{:X}", ModuleName, GetLastError());
+        return;
+    }
+
+    if (reinterpret_cast<IMAGE_DOS_HEADER*>(ModuleHandle)->e_magic != IMAGE_DOS_SIGNATURE) {
+        std::println("Invalid DOS Signature of {}", ModuleName);
+        return;
+    }
+
+    IMAGE_NT_HEADERS* Header = (IMAGE_NT_HEADERS*)((uintptr_t)ModuleHandle + ((IMAGE_DOS_HEADER*)ModuleHandle)->e_lfanew);
+
+    if (Header->Signature != IMAGE_NT_SIGNATURE) {
+        std::println("Invalid NT Signature of {}", ModuleName);
+        return;
+    }
+
+    if (Header->OptionalHeader.NumberOfRvaAndSizes < 0) {
+        std::println("Number of RVA and Sizes is less than 0 of {}", ModuleName);
+        return;
+    }
+
+    IMAGE_EXPORT_DIRECTORY* Exports = (IMAGE_EXPORT_DIRECTORY*)((uintptr_t)ModuleHandle + Header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+
+    if (Exports->AddressOfNames != 0) {
+        DWORD* Names = (DWORD*)((uintptr_t)ModuleHandle + Exports->AddressOfNames);
+        for (int i = 0; i <= Exports->NumberOfNames - 1; i++) {
+            CheckHooked(ProcessHandle, ModuleName, reinterpret_cast<const char*>(ModuleHandle) + Names[i]);
         }
+    }
+    else {
+        std::println("No exports found in {}", ModuleName);
+        return;
     }
 }
