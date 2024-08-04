@@ -4,7 +4,6 @@
 #include <iostream>
 #include <print>
 #include <vector>
-#include <array>
 
 #include <TlHelp32.h>
 #include <winnt.h>
