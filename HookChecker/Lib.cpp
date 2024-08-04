@@ -4,10 +4,9 @@
 #include <iostream>
 #include <print>
 #include <vector>
-#include <thread>
+#include <array>
 
 #include <TlHelp32.h>
-#include <shlwapi.h>
 #include <winnt.h>
 #include <assert.h>
 
@@ -62,26 +61,14 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
     }
 
     std::vector<BYTE> Buffer(25);
-
-    DWORD OldProtection;
-    if (!VirtualProtectEx(ProcessHandle, FuncAddress, Buffer.size(), PAGE_EXECUTE_READWRITE, &OldProtection)) {
-        std::println("VirtualProtectEx Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
-        return false;
-    }
-
     if (!ReadProcessMemory(ProcessHandle, FuncAddress, Buffer.data(), Buffer.size(), nullptr)) {
         std::println("ReadProcessMemory Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
         return false;
     }
 
-    if (!VirtualProtectEx(ProcessHandle, FuncAddress, Buffer.size(), OldProtection, &OldProtection)) {
-        std::println("VirtualProtectEx (Reverting to old protection) Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
-        return false;
-    }
-
     std::vector<BYTE> CurrentProcessBuffer(25);
     memcpy(CurrentProcessBuffer.data(), FuncAddress, CurrentProcessBuffer.size());
-    
+
     if (memcmp(Buffer.data(), CurrentProcessBuffer.data(), 25) != 0) {
         if (Buffer[0] != 0xE9 && Buffer[0] == CurrentProcessBuffer[0] || strcmp(ExportName, "KiUserInvertedFunctionTable") == 0) { // first check is jmp second is first byte match
             std::println("{} ( 0x{:X} ) in {} is hooked (Possible false flag)", ExportName, (uintptr_t)FuncAddress, ModuleName);
@@ -89,10 +76,10 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
         else {
             std::println("{} ( 0x{:X} ) in {} is hooked", ExportName, (uintptr_t)FuncAddress, ModuleName);
         }
-        
+
         std::print("Process Bytes: ");
 
-        for (int i = 0; i <= Buffer.size() - 1; i++) {
+        for (int i = 0; i < Buffer.size(); i++) {
             if (Buffer[i] < 0x10) {
                 std::print("0{:X} ", Buffer[i]);
             }
@@ -105,7 +92,7 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
 
         std::print("Expected Bytes: ");
 
-        for (int i = 0; i <= CurrentProcessBuffer.size() - 1; i++) {
+        for (int i = 0; i < CurrentProcessBuffer.size(); i++) {
             if (CurrentProcessBuffer[i] < 0x10) {
                 std::print("0{:X} ", CurrentProcessBuffer[i]);
             }
@@ -149,7 +136,7 @@ void WalkExportsAndCheck(HANDLE ProcessHandle, const char* ModuleName) {
 
     if (Exports->AddressOfNames != 0) {
         DWORD* Names = (DWORD*)((uintptr_t)ModuleHandle + Exports->AddressOfNames);
-        for (int i = 0; i <= Exports->NumberOfNames - 1; i++) {
+        for (int i = 0; i < Exports->NumberOfNames; i++) {
             CheckHooked(ProcessHandle, ModuleName, reinterpret_cast<const char*>(ModuleHandle) + Names[i]);
         }
     }
