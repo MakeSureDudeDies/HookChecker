@@ -47,6 +47,8 @@ int main() {
 		WalkExportsAndCheck(ProcessHandle, ModulesToCheck[i]);
 	}
 
+	CloseHandle(ProcessHandle);
+
 	system("pause");
 	return EXIT_SUCCESS;
 }

@@ -6,8 +6,6 @@
 #include <vector>
 
 #include <TlHelp32.h>
-#include <winnt.h>
-#include <assert.h>
 
 HANDLE GetProcessHandle(const wchar_t* ProcessName) {
     DWORD PIDWithHighestThreadCount = 0;
@@ -61,8 +59,13 @@ bool CheckHooked(HANDLE ProcessHandle, const char* ModuleName, const char* Expor
 
     std::vector<BYTE> Buffer(25);
     if (!ReadProcessMemory(ProcessHandle, FuncAddress, Buffer.data(), Buffer.size(), nullptr)) {
-        std::println("ReadProcessMemory Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
-        return false;
+        if (GetLastError() == 0x12B) { // Happens when the module simply isn't loaded. Enumerating is simply bloat when the error code can be simply checked.
+            return true;
+        }
+        else {
+            std::println("ReadProcessMemory Failed for {} ( Export Name: {} Address: 0x{:X} ). Error Code: 0x{:X}", ModuleName, ExportName, (uintptr_t)FuncAddress, GetLastError());
+            return false;
+        }
     }
 
     std::vector<BYTE> CurrentProcessBuffer(25);
@@ -136,7 +139,9 @@ void WalkExportsAndCheck(HANDLE ProcessHandle, const char* ModuleName) {
     if (Exports->AddressOfNames != 0) {
         DWORD* Names = (DWORD*)((uintptr_t)ModuleHandle + Exports->AddressOfNames);
         for (int i = 0; i < Exports->NumberOfNames; i++) {
-            CheckHooked(ProcessHandle, ModuleName, reinterpret_cast<const char*>(ModuleHandle) + Names[i]);
+            if (!CheckHooked(ProcessHandle, ModuleName, reinterpret_cast<const char*>(ModuleHandle) + Names[i])) {
+                std::println("CheckHooked failed on {}", ModuleName);
+            }
         }
     }
     else {
