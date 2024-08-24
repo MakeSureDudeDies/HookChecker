@@ -8,12 +8,13 @@
 #include <cstdio>
 #include <array>
 
-std::array<const char*, 5> ModulesToCheck = {
+std::array<const char*, 6> ModulesToCheck = {
 "ntdll.dll",
 "kernel32.dll",
 "user32.dll",
 "wintrust.dll",
-"crypt32.dll"
+"crypt32.dll",
+"KernelBase.dll"
 };
 
 std::string ProcessName;
